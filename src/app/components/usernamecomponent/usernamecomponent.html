@@ -1,4 +1,3 @@
-<input [formControl]="usernameControl" [placeholder]="placeholderText" />
+<input [formControl]="usernameControl" [placeholder]="placeholderText()" />
 
-<!-- Status message below input -->
-<span>{{ statusMessage }}</span>
+<span>{{ statusMessage() }}</span>

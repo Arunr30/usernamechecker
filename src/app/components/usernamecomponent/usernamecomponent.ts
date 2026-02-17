@@ -1,9 +1,15 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, effect, signal } from '@angular/core';
 import { FormControl, ReactiveFormsModule } from '@angular/forms';
-import { of } from 'rxjs';
-import { debounceTime, startWith, switchMap, tap } from 'rxjs/operators';
-import { UsernameService } from '../../service/usernameservice';
 import { CommonModule } from '@angular/common';
+import { debounceTime, map, startWith, switchMap } from 'rxjs/operators';
+import { of } from 'rxjs';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { UsernameService } from '../../service/usernameservice';
+
+type UsernameState =
+  | { type: 'empty' }
+  | { type: 'short' }
+  | { type: 'result'; data: { username: string; available: boolean } };
 
 @Component({
   selector: 'app-username-checker',
@@ -11,45 +17,78 @@ import { CommonModule } from '@angular/common';
   imports: [ReactiveFormsModule, CommonModule],
   templateUrl: './usernamecomponent.html',
 })
-export class UsernameCheckerComponent implements OnInit {
+export class UsernameCheckerComponent {
   usernameControl = new FormControl('');
-  placeholderText = 'Type username...';
-  checking = false;
-  statusMessage = '';
 
-  constructor(private usernameService: UsernameService) {}
+  checking = signal(false);
+  statusMessage = signal('');
+  placeholderText = signal('Type username...');
 
-  ngOnInit(): void {
-    this.usernameControl.valueChanges
-      .pipe(
+  constructor(private usernameService: UsernameService) {
+    // ✅ Let TypeScript infer the type automatically
+    const usernameResult = toSignal(
+      this.usernameControl.valueChanges.pipe(
         startWith(''),
-        debounceTime(300), // wait 300ms after every keystroke
-        tap((value) => {
-          if (!value) {
-            // empty input: reset everything
-            this.checking = false;
-            this.statusMessage = '';
-            this.placeholderText = 'Type username...';
-          } else {
-            // user typed something: show checking
-            this.checking = true;
-            this.placeholderText = 'Checking...';
-          }
-        }),
+        debounceTime(1000),
+
         switchMap((value) => {
-          if (!value) return of(null); // skip API for empty input
-          const safeUsername = value; // send raw value
-          return this.usernameService.checkUsername(safeUsername);
+          const clean = value?.trim() ?? '';
+
+          // 1️⃣ Empty input
+          if (!clean) {
+            return of({ type: 'empty' } as UsernameState);
+          }
+
+          // 2️⃣ Too short
+          if (clean.length < 3) {
+            return of({ type: 'short' } as UsernameState);
+          }
+
+          // 3️⃣ Valid → call API
+          this.checking.set(true);
+          this.placeholderText.set('Checking...');
+
+          return this.usernameService.checkUsername(clean).pipe(
+            map(
+              (result) =>
+                ({
+                  type: 'result',
+                  data: result,
+                }) as UsernameState,
+            ),
+          );
         }),
-        tap((result) => {
-          if (!result) return;
-          this.checking = false;
-          this.placeholderText = 'Type username...';
-          this.statusMessage = result.available
-            ? `"${result.username}" is available ✅`
-            : `"${result.username}" is taken ❌`;
-        }),
-      )
-      .subscribe();
+      ),
+      { initialValue: { type: 'empty' } },
+    );
+
+    effect(() => {
+      const result = usernameResult();
+
+      // TypeScript safety guard (prevents undefined error)
+      if (!result) return;
+
+      // Reset common state
+      this.checking.set(false);
+      this.placeholderText.set('Type username...');
+
+      if (result.type === 'empty') {
+        this.statusMessage.set('');
+        return;
+      }
+
+      if (result.type === 'short') {
+        this.statusMessage.set('Username must be at least 3 characters ⚠️');
+        return;
+      }
+
+      if (result.type === 'result') {
+        this.statusMessage.set(
+          result.data.available
+            ? `"${result.data.username}" is available ✅`
+            : `"${result.data.username}" is taken ❌`,
+        );
+      }
+    });
   }
 }
